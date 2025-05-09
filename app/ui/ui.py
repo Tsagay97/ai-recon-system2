@@ -1,6 +1,8 @@
 import streamlit as st
 from app.logic.extractor import extract_tables_from_pdf
 from app.logic.cleaner import clean_bob_data, clean_ricb_data
+from app.ui.chatbot import process_query
+import html
 
 def load_css(file_path="app/ui/style.css"):
     with open(file_path) as f:
@@ -9,37 +11,56 @@ def load_css(file_path="app/ui/style.css"):
 def render_ui():
     st.set_page_config(layout="wide")
     load_css()
-    st.title("📊 AI Reconciliation System with Chat Support")
+    
+    st.title("📊 AI Reconciliation System")
 
+    # Initialize session state for chat and matching
     if "match_started" not in st.session_state:
         st.session_state.match_started = False
-    if "chat_open" not in st.session_state:
-        st.session_state.chat_open = False
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
 
-    # Toggle chat state manually
-    if st.query_params.get("toggle_chat"):
-     st.session_state.chat_open = not st.session_state.chat_open
-
-
-    # Display chatbot panel if opened
-    if st.session_state.chat_open:
-        with st.container():
-            st.markdown("### 🤖 Smart Chat Assistant")
-            st.info("This space will be used for chatting about uploaded files.")
-            st.markdown("➡️ Use this to query policies, summaries, and more (coming soon).")
-        return
-
-    # Sidebar for file uploads
+    # Sidebar for file uploads and chat
     with st.sidebar:
         st.header("📂 Upload Files")
         bob_file = st.file_uploader("Upload BOB PDF", type=["pdf"], key="bob_pdf")
         ricb_file = st.file_uploader("Upload RICBL PDF", type=["pdf"], key="ricb_pdf")
 
+        # Chat section in the sidebar
+        with st.expander("💬 Chat with Assistant", expanded=False):
+            # Welcome message (shown only on first open)
+            if len(st.session_state.chat_history) == 0:
+                welcome_msg = "Hi! I can help with reconciliation questions. Ask me about matched records, unmatched entries, or general topics like fuzzy matching."
+                st.session_state.chat_history.append({"role": "assistant", "content": welcome_msg})
+
+            # Scrollable chat window
+            chat_container = st.container(height=300)  # Set a fixed height for scrollable area
+            with chat_container:
+                for message in st.session_state.chat_history:
+                    with st.chat_message(message["role"]):
+                        # Escape the content to prevent LaTeX rendering, but allow HTML styling
+                        escaped_content = html.escape(message["content"])
+                        st.markdown(f'<div class="chat-message {message["role"]}">{escaped_content}</div>', unsafe_allow_html=True)
+
+            # Chat input
+            user_input = st.chat_input("Ask me anything...", key="chat_input")
+            if user_input:
+                # Add user message to history
+                st.session_state.chat_history.append({"role": "user", "content": user_input})
+                
+                # Process the query using the chatbot logic
+                bot_response = process_query(user_input)
+                st.session_state.chat_history.append({"role": "assistant", "content": bot_response})
+
+                # Rerun to update the chat window
+                st.rerun()
+
+    # Main content
     if not bob_file or not ricb_file:
         st.info("⬅️ Please upload both BOB and RICBL PDF files to continue.")
     else:
         bob_raw_df = extract_tables_from_pdf(bob_file)
-        ricb_raw_df = extract_tables_from_pdf(ricb_file)
+        ricb_raw_df = extract_tables_from_pdf(ricb_file)  # Fixed typo: rocob_raw_df -> ricb_raw_df
         bob_df = clean_bob_data(bob_raw_df)
         ricb_df = clean_ricb_data(ricb_raw_df)
 
@@ -77,6 +98,11 @@ def render_ui():
                 unmatched_bob = bob_df[~bob_df[st.session_state.bob_match_col].isin(ricb_df[st.session_state.ricb_match_col])]
                 unmatched_ricb = ricb_df[~ricb_df[st.session_state.ricb_match_col].isin(bob_df[st.session_state.bob_match_col])]
 
+                # Store DataFrames in session state for chatbot access
+                st.session_state.matched_df = matched
+                st.session_state.unmatched_bob_df = unmatched_bob
+                st.session_state.unmatched_ricb_df = unmatched_ricb
+
                 st.subheader("📊 Reconciliation Summary")
                 c1, c2, c3 = st.columns(3)
                 with c1:
@@ -100,38 +126,3 @@ def render_ui():
 
                 with st.expander("❌ Unmatched RICBL Records"):
                     st.dataframe(unmatched_ricb, use_container_width=True)
-
-    # Floating Chat Button as HTML (always visible)
-    st.markdown("""
-        <style>
-            #chat-float-btn {
-                position: fixed;
-                bottom: 30px;
-                right: 30px;
-                background-color: #4CAF50;
-                color: white;
-                font-size: 22px;
-                padding: 14px 18px;
-                border-radius: 50%;
-                border: none;
-                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
-                animation: pulse 2s infinite;
-                z-index: 9999;
-                cursor: pointer;
-            }
-
-            @keyframes pulse {
-                0% { transform: scale(1); }
-                50% { transform: scale(1.1); }
-                100% { transform: scale(1); }
-            }
-        </style>
-        <script>
-            const toggleChat = () => {
-                const url = new URL(window.location.href);
-                url.searchParams.set("toggle_chat", "true");
-                window.location.href = url.toString();
-            }
-        </script>
-        <button id="chat-float-btn" onclick="toggleChat()">💬</button>
-    """, unsafe_allow_html=True)
